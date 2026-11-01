@@ -73,7 +73,7 @@ docker exec fw dmesg | grep FW-                            # kernel log (best ef
 
 Every deny rule carries a `counter`, so `nft -a list chain ...` shows packet
 and byte counts per rule — that is the deterministic blue-team signal in any
-environment, including GitHub Codespaces.
+environment — anywhere Docker runs.
 
 ## Where the proxy/WAF and NGFW would slot in
 

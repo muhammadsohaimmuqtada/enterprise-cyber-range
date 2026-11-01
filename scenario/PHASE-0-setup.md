@@ -70,7 +70,7 @@ there is nothing else to snapshot.
 - **Isolated lab** — every host runs inside the compose project's private
   bridge networks; nothing here touches a real network.
 - **Authorization** — you only attack machines you own, built from this
-  repository, on your own machine or Codespace.
+  repository — your own machine, a VM, or any host with Docker.
 - **Defensive goal** — every attacker action has a matching defender view;
   each phase ends with "what the blue team sees".
 

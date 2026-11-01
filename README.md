@@ -52,26 +52,23 @@ A single `fw` container routes between all four segments and enforces the video'
 
 ## 🚀 Quickstart
 
-**GitHub Codespaces (recommended — nothing to install locally):**
-
-1. Open this repo → **Code** → **Codespaces** → **Create codespace**.
-2. In the terminal: `make up` — the whole range builds and starts inside the Codespace VM (docker-in-docker is preconfigured).
-3. `make status` — verify every service is healthy and view the live firewall counters.
-4. Open [`scenario/PHASE-0-setup.md`](scenario/PHASE-0-setup.md) and begin.
-
-**Local machine (Linux with Docker):**
+**Requirements:** any environment with Docker Engine ≥ 24 and Docker Compose v2, x86_64, ~6 GB free RAM (+4 GB if you enable the SIEM profile). Your laptop, a home server, a VM, a cloud instance — the range is fully self-contained and runs identically everywhere; it never touches the host network beyond Docker itself.
 
 ```bash
 git clone https://github.com/muhammadsohaimmuqtada/enterprise-cyber-range.git
 cd enterprise-cyber-range
 cp .env.example .env
-make up          # bring up the full range
-make status      # health + firewall counters
+make up          # build and start the full range
+make status      # service health + live firewall counters
 ```
 
-Optional blue-team stack (adds Wazuh SIEM, needs ~4 GB RAM): `make blue`.
+Then open [`scenario/PHASE-0-setup.md`](scenario/PHASE-0-setup.md) and begin.
 
-> Reference configuration, validated with `docker compose config` and reviewed end-to-end, but not pre-run on every platform. Target: x86_64, Docker Engine ≥ 24, ~6 GB free RAM (4 GB more with the SIEM profile).
+Optional blue-team stack (adds the Wazuh SIEM, ~4 GB RAM): `make blue`.
+
+**No Docker on the machine in front of you?** Any throwaway Linux VM works — and a GitHub Codespace on this repo is preconfigured as one (docker-in-docker included), so it doubles as an isolated test bench. The lab itself neither knows nor cares where it runs.
+
+> Reference configuration, validated with `docker compose config` and reviewed end-to-end, but not pre-run on every platform. If a service misbehaves on your first boot, open an issue with the output of `make status`.
 
 ## ⚔️ The scenario — seven phases, both sides of the board
 
