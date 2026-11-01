@@ -1,0 +1,91 @@
+<!-- enterprise-cyber-range custom Wazuh rules (reference configuration)
+     Range: 100900-100999. Mounted read-only into the manager at
+     /var/ossec/etc/rules/local_rules.xml by docker-compose.yml (siem service,
+     "blue" profile). Validate against sample lines with:
+       docker exec -it siem /var/ossec/bin/wazuh-logtest
+-->
+<group name="enterprise-cyber-range,ecr,">
+
+  <group name="ecr-firewall,">
+
+  <!-- Any perimeter deny (nftables kernel-log line, mirrored to fw stdout). -->
+  <rule id="100900" level="5">
+    <match>FW-EDGE-DENY</match>
+    <description>ecr: perimeter firewall denied an inbound connection from the external segment.</description>
+  </rule>
+
+  <!-- Reconnaissance / brute-force shape: many edge denies in a short window. -->
+  <rule id="100901" level="10" frequency="20" timeframe="60">
+    <if_matched_sid>100900</if_matched_sid>
+    <description>ecr: FW-EDGE-DENY burst - 20+ perimeter denies in 60s (scan or brute-force pattern).</description>
+  </rule>
+
+  <!-- East-west moves the segmentation rules forbid. -->
+  <rule id="100902" level="8">
+    <match>FW-LATERAL-DENY</match>
+    <description>ecr: east-west lateral movement denied by segmentation (FW-LATERAL-DENY).</description>
+  </rule>
+
+  </group>
+
+  <group name="ecr-web,">
+
+  <!-- web01 /var/log/app/access.log: the simulated SQLi bypass was accepted. -->
+  <rule id="100910" level="12">
+    <match>AUTH-BYPASS</match>
+    <description>ecr: authentication bypass accepted on the portal login (simulated SQLi string) - phase 2.</description>
+  </rule>
+
+  <!-- web01 /var/log/app/access.log: a command ran through the /console shell. -->
+  <rule id="100911" level="12">
+    <match>CONSOLE-EXEC</match>
+    <description>ecr: command executed through the /console dev backdoor on web01.</description>
+  </rule>
+
+  </group>
+
+  <group name="ecr-smb,">
+
+  <!-- filesrv /var/log/samba/audit.log: a file was opened on the 'critical'
+       share. full_audit line shape:
+       smbd_audit: fileshare|10.10.10.5|critical|open|ok|q3-financials.csv -->
+  <rule id="100920" level="12">
+    <match>smbd_audit</match>
+    <pcre2>critical\|open\|ok</pcre2>
+    <description>ecr: file opened on the SIMULATED 'critical' SMB share - phase 5.</description>
+  </rule>
+
+  <!-- FIM-analog: modify/rename/delete on the 'critical' share. -->
+  <rule id="100921" level="12">
+    <match>smbd_audit</match>
+    <pcre2>critical\|(unlink|rename|pwrite)\|ok</pcre2>
+    <description>ecr: file modified or deleted on the 'critical' share (FIM-analog).</description>
+  </rule>
+
+  <!-- Covering-tracks analog: a .log file deleted over SMB. -->
+  <rule id="100940" level="10">
+    <match>smbd_audit</match>
+    <pcre2>\|unlink\|ok\|[^|]*\.log</pcre2>
+    <description>ecr: deletion of a .log file over SMB - covering-tracks analog (phase 7).</description>
+  </rule>
+
+  </group>
+
+  <group name="ecr-egress,">
+
+  <!-- Any internal host attempting outbound traffic to the external segment. -->
+  <rule id="100930" level="8">
+    <match>FW-EGRESS-DENY</match>
+    <description>ecr: internal host attempted outbound traffic to the external segment (FW-EGRESS-DENY).</description>
+  </rule>
+
+  <!-- Exfiltration-over-SMB pattern: outbound tcp/445 specifically. -->
+  <rule id="100931" level="12">
+    <match>FW-EGRESS-DENY</match>
+    <pcre2>DPT=445</pcre2>
+    <description>ecr: outbound SMB (445) attempt toward the external segment - exfiltration-over-SMB pattern (phase 6).</description>
+  </rule>
+
+  </group>
+
+</group>

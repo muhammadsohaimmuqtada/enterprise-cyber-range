@@ -1,0 +1,321 @@
+# =============================================================================
+# enterprise-cyber-range - reference Docker Compose topology
+# =============================================================================
+# A Linux/Samba analog of the video's Windows enterprise:
+#
+#   attack-net  172.31.100.0/24   "outside" (attacker + simulated ISP hop)
+#   dmz         10.10.10.0/24     public web app (web01)
+#   users       10.10.20.0/24     domain workstations (ws1, ws2)
+#   servers     10.10.30.0/24     dc01 (Samba AD DC) + filesrv (SMB)
+#                                 [+ siem, started with the "blue" profile]
+#
+# The 'fw' container is the only router between segments and enforces
+# fw/nftables.conf (perimeter + east-west + egress policy). No service
+# publishes ports on the host: every vantage point is inside the range.
+#
+# Quick start: scenario/PHASE-0-setup.md   Ground rules: DISCLAIMER.md
+# =============================================================================
+
+name: enterprise-cyber-range
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+networks:
+  attack-net:
+    name: ecr-attack-net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.100.0/24
+          gateway: 172.31.100.254   # pinned off .1 so the fw container can own 172.31.100.1
+  dmz:
+    name: ecr-dmz
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.10.0/24
+          gateway: 10.10.10.254     # same reason: fw owns 10.10.10.1
+  users:
+    name: ecr-users
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.20.0/24
+          gateway: 10.10.20.254     # fw owns 10.10.20.1
+  servers:
+    name: ecr-servers
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.30.0/24
+          gateway: 10.10.30.254     # fw owns 10.10.30.1
+
+volumes:
+  dc01_state:
+  dc01_etc:
+  filesrv_state:
+
+services:
+  # ---------------------------------------------------------------------------
+  # Perimeter + internal firewall. Attached to all four networks; the only
+  # router between segments. Loads fw/nftables.conf (mounted read-only).
+  # ---------------------------------------------------------------------------
+  fw:
+    build: ./fw
+    image: ecr-fw
+    container_name: fw
+    hostname: fw
+    cap_add:
+      - NET_ADMIN
+      - SYSLOG
+    sysctls:
+      - net.ipv4.ip_forward=1
+    networks:
+      attack-net:
+        ipv4_address: 172.31.100.1
+      dmz:
+        ipv4_address: 10.10.10.1
+      users:
+        ipv4_address: 10.10.20.1
+      servers:
+        ipv4_address: 10.10.30.1
+    volumes:
+      - ./fw/nftables.conf:/fw/nftables.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nft list ruleset | grep -q 'FW-EDGE-DENY'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # DMZ: nginx (TLS termination) + Flask "Acme Intranet Portal" behind gunicorn.
+  # WEAK_AUTH=1 mounts the two simulated weaknesses used by the scenario
+  # (login bypass + /console?token=DEV-2026). Default 0.
+  # ---------------------------------------------------------------------------
+  web01:
+    build: ./web01
+    image: ecr-web01
+    container_name: web01
+    hostname: web01
+    depends_on:
+      fw:
+        condition: service_healthy
+    environment:
+      WEAK_AUTH: "${WEAK_AUTH:-0}"
+    cap_add:
+      - NET_ADMIN          # entrypoint pins the default route through fw
+    networks:
+      dmz:
+        ipv4_address: 10.10.10.5
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Samba Active Directory Domain Controller (the video's Domain Controller).
+  # Realm LAB.LOCAL, domain LAB. Provisioned on first boot into dc01_state.
+  # ---------------------------------------------------------------------------
+  dc01:
+    build: ./dc01
+    image: ecr-dc01
+    container_name: dc01
+    hostname: dc01
+    depends_on:
+      fw:
+        condition: service_healthy
+    environment:
+      DC_ADMIN_PASS: "${DC_ADMIN_PASS:-Lab-Admin#2026!}"
+    cap_add:
+      - NET_ADMIN
+    networks:
+      servers:
+        ipv4_address: 10.10.30.10
+    volumes:
+      - dc01_state:/var/lib/samba   # SAM database, sysvol, provision marker
+      - dc01_etc:/etc/samba         # provision-generated smb.conf
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/445' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Standalone SMB file server (documented simplification: NOT a domain member;
+  # it mirrors domain accounts locally). Shares: public, critical.
+  # ---------------------------------------------------------------------------
+  filesrv:
+    build: ./filesrv
+    image: ecr-filesrv
+    container_name: filesrv
+    hostname: filesrv
+    depends_on:
+      fw:
+        condition: service_healthy
+    cap_add:
+      - NET_ADMIN
+    networks:
+      servers:
+        ipv4_address: 10.10.30.11
+    volumes:
+      - ./filesrv/smb.conf:/etc/samba/smb.conf:ro
+      - ./filesrv/rsyslog-audit.conf:/etc/rsyslog.d/30-audit.conf:ro
+      - filesrv_state:/var/lib/samba   # passdb / secrets, survives restarts
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/445' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Domain-joined workstations (the video's client OS). Join LAB.LOCAL on first
+  # boot; fail-soft: if the join fails after 5 retries the container stays up
+  # and reports unhealthy (see ws/README.md).
+  # ---------------------------------------------------------------------------
+  ws1:
+    build: ./ws
+    image: ecr-ws
+    container_name: ws1
+    hostname: ws1
+    depends_on:
+      fw:
+        condition: service_healthy
+      dc01:
+        condition: service_healthy
+    environment:
+      DC_ADMIN_PASS: "${DC_ADMIN_PASS:-Lab-Admin#2026!}"
+    cap_add:
+      - NET_ADMIN
+    networks:
+      users:
+        ipv4_address: 10.10.20.5
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/lib/range/joined || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+      start_period: 300s
+    restart: unless-stopped
+    logging: *default-logging
+
+  ws2:
+    build: ./ws
+    image: ecr-ws
+    container_name: ws2
+    hostname: ws2
+    depends_on:
+      fw:
+        condition: service_healthy
+      dc01:
+        condition: service_healthy
+    environment:
+      DC_ADMIN_PASS: "${DC_ADMIN_PASS:-Lab-Admin#2026!}"
+    cap_add:
+      - NET_ADMIN
+    networks:
+      users:
+        ipv4_address: 10.10.20.6
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/lib/range/joined || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+      start_period: 300s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Red team workstation (Kali). Expected IP: 172.31.100.x (dynamic).
+  # Entry shell: docker exec -it attacker bash   (user 'red', passwordless sudo)
+  # ---------------------------------------------------------------------------
+  attacker:
+    build: ./attacker
+    image: ecr-attacker
+    container_name: attacker
+    hostname: attacker
+    depends_on:
+      fw:
+        condition: service_healthy
+    cap_add:
+      - NET_ADMIN          # entrypoint pins the default route through fw
+    networks:
+      - attack-net
+    healthcheck:
+      test: ["CMD-SHELL", "ip route show default | grep -q 'via 172.31.100.1'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Optional "upstream" hop on the external segment so the attacker is not the
+  # only host on the outside. Serves a fake ISP page on port 80.
+  # ---------------------------------------------------------------------------
+  internet:
+    build: ./internet
+    image: ecr-internet
+    container_name: internet
+    hostname: internet
+    depends_on:
+      fw:
+        condition: service_healthy
+    networks:
+      attack-net:
+        ipv4_address: 172.31.100.10
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Blue profile: Wazuh manager (single node). ~4 GB RAM. Custom detection
+  # rules from siem/rules/local-rules.xml. Start with: make blue
+  # ---------------------------------------------------------------------------
+  siem:
+    image: wazuh/wazuh-manager:4.7.5
+    container_name: siem
+    hostname: siem
+    profiles:
+      - blue
+    depends_on:
+      fw:
+        condition: service_healthy
+    networks:
+      servers:
+        ipv4_address: 10.10.30.20
+    volumes:
+      - ./siem/rules/local-rules.xml:/var/ossec/etc/rules/local_rules.xml:ro
+    mem_limit: 4g
+    healthcheck:
+      test: ["CMD-SHELL", "/var/ossec/bin/wazuh-control status | grep -q 'is running' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+    logging: *default-logging

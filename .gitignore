@@ -1,0 +1,10 @@
+# secrets / local config
+.env
+
+# runtime state
+volumes/
+*.log
+
+# python
+__pycache__/
+*.pyc

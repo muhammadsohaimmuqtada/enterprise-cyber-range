@@ -1,0 +1,14 @@
+{
+  "name": "Cyber Range Ops",
+  "image": "mcr.microsoft.com/devcontainers/base:debian",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "dockerDashComposeVersion": "v2"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y jq curl",
+  "forwardPorts": [],
+  "remoteUser": "vscode"
+}
